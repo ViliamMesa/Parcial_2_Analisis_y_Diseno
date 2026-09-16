@@ -1,4 +1,5 @@
-# Parcial_2_Analisis_y_Diseno
+# Parcial 2 Análisis y Diseno de Algoritmos
 ---
 ## Integrantes:
 - Mariana Cardona Vidal
+- Viliam Sofía Mesa Angarita
