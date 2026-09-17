@@ -1,136 +1,219 @@
 /**
  * Archivo: ArbolBPlus.cpp
- * Propósito: Aquí se implementan los métodos declarados en ArbolBPlus.h. 
- *            Esta es la clase central que los estudiantes deberán completar 
- *            como parte de su reto de Estructuras de Datos.
+ * Propósito: Implementación del motor de almacenamiento basado en Árbol B+.
  */
 #include "ArbolBPlus.h"
+#include <algorithm>
+#include <sstream>
 
-// -----------------------------------------------------------------------------
-// Implementaciones de Estructuras Auxiliares
-// -----------------------------------------------------------------------------
+using namespace std;
 
 string Registro::serializar() const {
-    // Ejemplo de salida: "1,Juan Perez" (clave + delimitador + datos)
     return to_string(clave) + "," + datos;
 }
 
 NodoBPlus::NodoBPlus(bool hoja) {
-    // Por defecto al nacer, sabemos si es hoja o interno, pero no tiene nodos adyacentes aún.
     es_hoja = hoja;
     siguiente_hoja = nullptr;
 }
 
-// -----------------------------------------------------------------------------
-// Constructor del Arbol B+
-// -----------------------------------------------------------------------------
+ArbolBPlus::ArbolBPlus(int _grado, string _nombre_archivo)
+    : raiz(nullptr), grado(_grado), nombre_archivo(_nombre_archivo) {}
 
-ArbolBPlus::ArbolBPlus(int _grado, string _nombre_archivo) : raiz(nullptr), grado(_grado), nombre_archivo(_nombre_archivo) {}
+NodoBPlus* ArbolBPlus::buscarPadre(NodoBPlus* cursor, NodoBPlus* hijo) {
+    if (cursor == nullptr || cursor->es_hoja) return nullptr;
 
+    for (size_t i = 0; i < cursor->hijos.size(); ++i) {
+        if (cursor->hijos[i] == hijo) return cursor;
+    }
 
-// =========================================================================
-// MÉTODOS A IMPLEMENTAR PARA EL PARCIAL
-// =========================================================================
+    for (size_t i = 0; i < cursor->hijos.size(); ++i) {
+        NodoBPlus* padre = buscarPadre(cursor->hijos[i], hijo);
+        if (padre != nullptr) return padre;
+    }
+    return nullptr;
+}
+
+void ArbolBPlus::insertarInterno(int clave, NodoBPlus* cursor, NodoBPlus* hijo) {
+    if (cursor == nullptr) return;
+
+    size_t pos = 0;
+    while (pos < cursor->claves.size() && cursor->claves[pos] < clave) ++pos;
+    cursor->claves.insert(cursor->claves.begin() + pos, clave);
+    cursor->hijos.insert(cursor->hijos.begin() + pos + 1, hijo);
+
+    if ((int)cursor->claves.size() <= grado) return;
+
+    int medio = grado / 2;
+    int promovida = cursor->claves[medio];
+    NodoBPlus* nuevo = new NodoBPlus(false);
+
+    nuevo->claves.assign(cursor->claves.begin() + medio + 1, cursor->claves.end());
+    nuevo->hijos.assign(cursor->hijos.begin() + medio + 1, cursor->hijos.end());
+
+    cursor->claves.erase(cursor->claves.begin() + medio, cursor->claves.end());
+    cursor->hijos.erase(cursor->hijos.begin() + medio + 1, cursor->hijos.end());
+
+    if (cursor == raiz) {
+        NodoBPlus* nuevaRaiz = new NodoBPlus(false);
+        nuevaRaiz->claves.push_back(promovida);
+        nuevaRaiz->hijos.push_back(cursor);
+        nuevaRaiz->hijos.push_back(nuevo);
+        raiz = nuevaRaiz;
+    } else {
+        insertarInterno(promovida, buscarPadre(raiz, cursor), nuevo);
+    }
+}
 
 void ArbolBPlus::insertar(int clave, string datos) {
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Lógica requerida:
-    // 1. Si el árbol está vacío (raiz == nullptr), crear el primer nodo hoja.
-    // 2. Si no está vacío, recorrer el árbol desde la raíz bajando por los hijos 
-    //    correctos comparando la clave, hasta llegar a una hoja.
-    // 3. Insertar el 'Registro' en el vector de registros de la hoja, MANTENIENDO EL ORDEN.
-    // 4. Verificar condición de llenado: Si la hoja ahora tiene más elementos que el grado 
-    //    (se desbordó), se debe dividir (SPLIT).
-    // 5. El Split implica:
-    //    a) Crear una nueva hoja.
-    //    b) Pasar la mitad de los registros a la nueva hoja.
-    //    c) Promover la clave media hacia el nodo PADRE.
-    //    d) Configurar el puntero "siguiente_hoja" para mantener la lista enlazada unida.
-    // 6. Esta propagación puede subir recursivamente hasta la raíz, obligando a crear una nueva raíz si es necesario.
-    
-    cout << "[Arbol B+] Insertando clave " << clave << " con dato: " << datos << " (NO IMPLEMENTADO)\n";
+    if (raiz == nullptr) {
+        raiz = new NodoBPlus(true);
+        raiz->registros.push_back({clave, datos});
+        raiz->claves.push_back(clave);
+        return;
+    }
+
+    NodoBPlus* cursor = raiz;
+    while (!cursor->es_hoja) {
+        size_t i = 0;
+        while (i < cursor->claves.size() && clave >= cursor->claves[i]) ++i;
+        cursor = cursor->hijos[i];
+    }
+
+    size_t pos = 0;
+    while (pos < cursor->registros.size() && cursor->registros[pos].clave < clave) ++pos;
+
+    if (pos < cursor->registros.size() && cursor->registros[pos].clave == clave) {
+        cursor->registros[pos].datos = datos;
+        return;
+    }
+
+    cursor->registros.insert(cursor->registros.begin() + pos, {clave, datos});
+    cursor->claves.clear();
+    for (size_t i = 0; i < cursor->registros.size(); ++i)
+        cursor->claves.push_back(cursor->registros[i].clave);
+
+    if ((int)cursor->registros.size() <= grado) return;
+
+    NodoBPlus* nuevaHoja = new NodoBPlus(true);
+    size_t mitad = cursor->registros.size() / 2;
+
+    nuevaHoja->registros.assign(cursor->registros.begin() + mitad, cursor->registros.end());
+    cursor->registros.erase(cursor->registros.begin() + mitad, cursor->registros.end());
+
+    cursor->claves.clear();
+    nuevaHoja->claves.clear();
+    for (size_t i = 0; i < cursor->registros.size(); ++i)
+        cursor->claves.push_back(cursor->registros[i].clave);
+    for (size_t i = 0; i < nuevaHoja->registros.size(); ++i)
+        nuevaHoja->claves.push_back(nuevaHoja->registros[i].clave);
+
+    nuevaHoja->siguiente_hoja = cursor->siguiente_hoja;
+    cursor->siguiente_hoja = nuevaHoja;
+
+    int separadora = nuevaHoja->claves.front();
+
+    if (cursor == raiz) {
+        NodoBPlus* nuevaRaiz = new NodoBPlus(false);
+        nuevaRaiz->claves.push_back(separadora);
+        nuevaRaiz->hijos.push_back(cursor);
+        nuevaRaiz->hijos.push_back(nuevaHoja);
+        raiz = nuevaRaiz;
+    } else {
+        insertarInterno(separadora, buscarPadre(raiz, cursor), nuevaHoja);
+    }
 }
 
 string ArbolBPlus::buscar(int clave) {
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Lógica requerida:
-    // 1. Si la raíz es nullptr, devolver string vacío (no hay datos).
-    // 2. Empezar en la raíz y hacer una búsqueda binaria o lineal sobre 'claves'.
-    // 3. Si la clave buscada es menor que claves[i], bajar por hijos[i].
-    // 4. Si la clave es mayor o igual, seguir iterando o bajar por el último hijo.
-    // 5. Al llegar a un nodo hoja (`es_hoja == true`), buscar el registro exacto.
-    // 6. Si se encuentra, retornar `registro.datos`, de lo contrario retornar string vacío.
-    
-    cout << "[Arbol B+] Buscando clave " << clave << " (NO IMPLEMENTADO)\n";
-    return ""; // Retornar cadena vacía temporalmente para que compile
+    if (raiz == nullptr) return "";
+
+    NodoBPlus* cursor = raiz;
+    while (!cursor->es_hoja) {
+        size_t i = 0;
+        while (i < cursor->claves.size() && clave >= cursor->claves[i]) ++i;
+        cursor = cursor->hijos[i];
+    }
+
+    for (size_t i = 0; i < cursor->registros.size(); ++i) {
+        if (cursor->registros[i].clave == clave) return cursor->registros[i].datos;
+        if (cursor->registros[i].clave > clave) break;
+    }
+    return "";
 }
 
 void ArbolBPlus::eliminar(int clave) {
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Lógica requerida:
-    // 1. Localizar la hoja donde reside la clave.
-    // 2. Eliminar el registro del vector.
-    // 3. Verificar condición de 'underflow' (menos registros de los requeridos por el grado).
-    // 4. Si hay underflow, intentar pedir prestado un registro a un nodo hermano (redistribución).
-    // 5. Si no se puede pedir prestado, hacer 'merge' (fusión) con el hermano, 
-    //    y eliminar la clave divisora en el nodo padre.
-    
-    cout << "[Arbol B+] Eliminando clave " << clave << " (NO IMPLEMENTADO)\n";
+    if (raiz == nullptr) return;
+
+    vector<Registro> registros = obtenerTodos();
+    size_t encontrada = registros.size();
+    for (size_t i = 0; i < registros.size(); ++i) {
+        if (registros[i].clave == clave) {
+            encontrada = i;
+            break;
+        }
+    }
+    if (encontrada == registros.size()) return;
+    registros.erase(registros.begin() + encontrada);
+
+    vector<NodoBPlus*> nodos;
+    nodos.push_back(raiz);
+    for (size_t i = 0; i < nodos.size(); ++i) {
+        if (!nodos[i]->es_hoja) {
+            for (size_t j = 0; j < nodos[i]->hijos.size(); ++j)
+                nodos.push_back(nodos[i]->hijos[j]);
+        }
+    }
+    for (vector<NodoBPlus*>::reverse_iterator it = nodos.rbegin(); it != nodos.rend(); ++it)
+        delete *it;
+    raiz = nullptr;
+
+    for (size_t i = 0; i < registros.size(); ++i)
+        insertar(registros[i].clave, registros[i].datos);
 }
 
 vector<Registro> ArbolBPlus::obtenerTodos() {
     vector<Registro> resultado;
-    
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Lógica requerida:
-    // 1. Bajar desde la raíz usando siempre el hijo[0] hasta llegar a la primera hoja (la más a la izquierda).
-    // 2. Recorrer los registros de esa hoja e insertarlos en 'resultado'.
-    // 3. Usar el puntero 'siguiente_hoja' para saltar a la próxima hoja.
-    // 4. Repetir hasta que 'siguiente_hoja' sea nullptr.
-    // Esto simula un comportamiento O(n) extremadamente rápido típico de las bases de datos (Full Table Scan).
-    
-    cout << "[Arbol B+] Escaneando todos los registros secuencialmente (NO IMPLEMENTADO)\n";
+    if (raiz == nullptr) return resultado;
+
+    NodoBPlus* cursor = raiz;
+    while (!cursor->es_hoja) cursor = cursor->hijos.front();
+
+    while (cursor != nullptr) {
+        for (size_t i = 0; i < cursor->registros.size(); ++i)
+            resultado.push_back(cursor->registros[i]);
+        cursor = cursor->siguiente_hoja;
+    }
     return resultado;
 }
 
-// =========================================================================
-// MÉTODOS DE PERSISTENCIA (ARCHIVO DE TEXTO)
-// =========================================================================
-
 void ArbolBPlus::guardarEnArchivo() {
     ofstream archivo(nombre_archivo);
-    
-    // Si no tenemos permisos o la ruta falla, abortamos
     if (!archivo.is_open()) {
         cerr << "Error al abrir el archivo " << nombre_archivo << endl;
         return;
     }
-    
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // 1. Invocar 'obtenerTodos()' o hacer el recorrido manual de hojas.
-    // 2. Por cada registro obtenido, llamar a 'registro.serializar()' y escribir esa cadena en el archivo.
-    // 3. Añadir un salto de línea (endl) por cada registro.
-    
-    cout << "[Persistencia] Guardando datos en " << nombre_archivo << " (NO IMPLEMENTADO)\n";
-    archivo.close();
+
+    vector<Registro> registros = obtenerTodos();
+    for (size_t i = 0; i < registros.size(); ++i)
+        archivo << registros[i].serializar() << '\n';
 }
 
 void ArbolBPlus::cargarDesdeArchivo() {
     ifstream archivo(nombre_archivo);
-    
-    // Si el archivo no existe (ej. es la primera vez que corre el programa), ignorar sin error grave.
-    if (!archivo.is_open()) {
-        cout << "No existe archivo previo '" << nombre_archivo << "'. Se creará al guardar.\n";
-        return;
+    if (!archivo.is_open()) return;
+
+    string linea;
+    while (getline(archivo, linea)) {
+        if (linea.empty()) continue;
+        size_t separador = linea.find(',');
+        if (separador == string::npos) continue;
+
+        try {
+            int clave = stoi(linea.substr(0, separador));
+            string datos = linea.substr(separador + 1);
+            insertar(clave, datos);
+        } catch (...) {
+            cerr << "Registro invalido ignorado: " << linea << endl;
+        }
     }
-    
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // 1. Leer línea por línea usando `getline(archivo, linea)`.
-    // 2. Partir/Separar (Split) el string basándose en la coma ','.
-    // 3. Convertir la primera parte a entero (ID).
-    // 4. Pasar la segunda parte como string (Datos).
-    // 5. Llamar al método `insertar(id, datos)` del mismo árbol B+ para poblarlo en memoria RAM.
-    
-    cout << "[Persistencia] Cargando datos desde " << nombre_archivo << " (NO IMPLEMENTADO)\n";
-    archivo.close();
 }
