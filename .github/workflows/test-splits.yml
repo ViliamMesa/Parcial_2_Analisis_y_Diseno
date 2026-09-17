@@ -1,0 +1,21 @@
+name: Pruebas B+ - Splits
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-splits:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Compilar pruebas de splits
+        run: g++ -Wall -std=c++11 tests/test_splits.cpp ArbolBPlus.cpp -o test_splits
+
+      - name: Ejecutar pruebas de splits
+        run: ./test_splits
