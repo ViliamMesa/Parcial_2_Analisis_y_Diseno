@@ -41,7 +41,7 @@ vector<string> AnalizadorSQL::separarPorComas(string texto) {
 
     for (size_t i = 0; i < texto.size(); ++i) {
         char c = texto[i];
-        if (c == '\'' ) dentroComillas = !dentroComillas;
+        if (c == '\'') dentroComillas = !dentroComillas;
 
         if (c == ',' && !dentroComillas) {
             partes.push_back(quitarEspacios(actual));
@@ -58,7 +58,8 @@ vector<string> AnalizadorSQL::separarPorComas(string texto) {
 int AnalizadorSQL::posicionColumna(string columna) {
     columna = aMayusculas(quitarEspacios(columna));
     for (size_t i = 0; i < columnas.size(); ++i) {
-        if (aMayusculas(columnas[i]) == columna) return static_cast<int>(i);
+        if (aMayusculas(columnas[i]) == columna)
+            return static_cast<int>(i);
     }
     return -1;
 }
@@ -99,22 +100,28 @@ void AnalizadorSQL::destruirIndices() {
 }
 
 void AnalizadorSQL::reconstruirIndices() {
+    vector<Registro> registros = bd->obtenerTodos();
+
     for (size_t i = 0; i < indices.size(); ++i) {
         IndiceSecundario& indice = indices[i];
         indice.arbol->limpiar();
 
-        vector<Registro> registros = bd->obtenerTodos();
         for (size_t j = 0; j < registros.size(); ++j) {
             int claveIndice;
+
+            // La columna 0 es la clave primaria.
             if (indice.posicionColumna == 0) {
                 claveIndice = registros[j].clave;
             } else {
-                string valor = extraerCampo(registros[j].datos, indice.posicionColumna - 1);
-                if (!convertirEntero(valor, claveIndice)) continue;
+                // Las columnas adicionales están serializadas en datos.
+                string valor = extraerCampo(registros[j].datos,
+                                            indice.posicionColumna - 1);
+                if (!convertirEntero(valor, claveIndice))
+                    continue;
             }
 
-            // Un índice puede apuntar a más de una fila. Guardamos los IDs
-            // primarios separados por comas en el registro del árbol secundario.
+            // El segundo árbol almacena como valor los IDs de las filas
+            // originales. Así un mismo valor de índice puede apuntar a varias filas.
             string ids = indice.arbol->buscar(claveIndice);
             if (!ids.empty()) ids += ",";
             ids += to_string(registros[j].clave);
@@ -169,16 +176,20 @@ void AnalizadorSQL::analizarDDL(string consulta, string comando) {
             }
 
             columnas.clear();
-            vector<string> definiciones = separarPorComas(limpia.substr(paren + 1, cierre - paren - 1));
+            vector<string> definiciones = separarPorComas(
+                limpia.substr(paren + 1, cierre - paren - 1));
+
             for (size_t i = 0; i < definiciones.size(); ++i) {
                 stringstream col(definiciones[i]);
                 string nombreColumna;
                 col >> nombreColumna;
-                if (!nombreColumna.empty()) columnas.push_back(nombreColumna);
+                if (!nombreColumna.empty())
+                    columnas.push_back(nombreColumna);
             }
 
             cout << "Tabla '" << nombreTabla << "' creada. Arbol B+ primario listo.\n";
-        } else if (mayus.find("CREATE INDEX") == 0) {
+        }
+        else if (mayus.find("CREATE INDEX") == 0) {
             size_t inicio = string("CREATE INDEX").size();
             size_t onPos = mayus.find(" ON ", inicio);
             if (onPos == string::npos) {
@@ -194,15 +205,19 @@ void AnalizadorSQL::analizarDDL(string consulta, string comando) {
                 return;
             }
 
-            string tabla = quitarEspacios(limpia.substr(inicioTabla, parentesis - inicioTabla));
+            string tabla = quitarEspacios(limpia.substr(
+                inicioTabla, parentesis - inicioTabla));
             size_t cierre = limpia.find(')', parentesis);
             if (cierre == string::npos) {
                 cout << "Error: falta cerrar la columna del indice.\n";
                 return;
             }
 
-            string columna = quitarEspacios(limpia.substr(parentesis + 1, cierre - parentesis - 1));
-            if (nombreTabla.empty() || aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+            string columna = quitarEspacios(limpia.substr(
+                parentesis + 1, cierre - parentesis - 1));
+
+            if (nombreTabla.empty() ||
+                aMayusculas(tabla) != aMayusculas(nombreTabla)) {
                 cout << "Error: la tabla indicada no coincide con la tabla creada.\n";
                 return;
             }
@@ -220,16 +235,23 @@ void AnalizadorSQL::analizarDDL(string consulta, string comando) {
                 }
             }
 
+            // El esqueleto define claves B+ como enteros. El índice secundario
+            // conserva esa misma estructura y almacena los IDs primarios como valor.
             ArbolBPlus* arbolIndice = new ArbolBPlus(3, "");
-            indices.push_back(IndiceSecundario(nombreIndice, columna, posicion, arbolIndice));
+            indices.push_back(IndiceSecundario(nombreIndice, columna,
+                                                posicion, arbolIndice));
             reconstruirIndices();
 
-            cout << "Indice '" << nombreIndice << "' creado sobre la columna '" << columna << "'.\n";
-            cout << "Nota: el Arbol B+ del esqueleto utiliza claves enteras; por eso el valor indexado debe ser numerico.\n";
-        } else {
+            cout << "Indice '" << nombreIndice << "' creado sobre la columna '"
+                 << columna << "'.\n";
+            cout << "Nota: el valor de la columna indexada debe ser numerico en "
+                 << "este esqueleto.\n";
+        }
+        else {
             cout << "Error: comando CREATE no reconocido. Use CREATE TABLE o CREATE INDEX.\n";
         }
-    } else if (comando == "DROP") {
+    }
+    else if (comando == "DROP") {
         string prefijo = "DROP TABLE";
         if (mayus.find(prefijo) != 0) {
             cout << "Error: solo se admite DROP TABLE.\n";
@@ -237,7 +259,8 @@ void AnalizadorSQL::analizarDDL(string consulta, string comando) {
         }
 
         string tabla = quitarEspacios(limpia.substr(prefijo.size()));
-        if (!nombreTabla.empty() && aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+        if (!nombreTabla.empty() &&
+            aMayusculas(tabla) != aMayusculas(nombreTabla)) {
             cout << "Error: la tabla indicada no coincide con la tabla creada.\n";
             return;
         }
@@ -247,6 +270,7 @@ void AnalizadorSQL::analizarDDL(string consulta, string comando) {
         bd->eliminarArchivo();
         nombreTabla.clear();
         columnas.clear();
+
         cout << "Tabla eliminada y archivo de persistencia destruido.\n";
     }
 }
@@ -264,12 +288,14 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
         string prefijo = "INSERT INTO";
         size_t inicio = mayus.find(prefijo);
         size_t valuesPos = mayus.find(" VALUES ", inicio + prefijo.size());
+
         if (inicio != 0 || valuesPos == string::npos) {
             cout << "Error: sintaxis INSERT invalida.\n";
             return;
         }
 
-        string tabla = quitarEspacios(limpia.substr(prefijo.size(), valuesPos - prefijo.size()));
+        string tabla = quitarEspacios(limpia.substr(
+            prefijo.size(), valuesPos - prefijo.size()));
         if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
             cout << "Error: tabla no encontrada.\n";
             return;
@@ -282,7 +308,9 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
             return;
         }
 
-        vector<string> valores = separarPorComas(limpia.substr(abre + 1, cierre - abre - 1));
+        vector<string> valores = separarPorComas(
+            limpia.substr(abre + 1, cierre - abre - 1));
+
         if (valores.size() < 1) {
             cout << "Error: INSERT sin valores.\n";
             return;
@@ -302,6 +330,7 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
 
         bd->insertar(id, datos);
         reconstruirIndices();
+        bd->guardarEnArchivo();
         cout << "Registro insertado correctamente.\n";
     }
     else if (comando == "SELECT") {
@@ -312,7 +341,10 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
 
         size_t inicioTabla = string("SELECT * FROM").size();
         size_t wherePos = mayus.find(" WHERE ", inicioTabla);
-        string tabla = quitarEspacios(limpia.substr(inicioTabla, wherePos == string::npos ? string::npos : wherePos - inicioTabla));
+        string tabla = quitarEspacios(limpia.substr(
+            inicioTabla,
+            wherePos == string::npos ? string::npos : wherePos - inicioTabla));
+
         if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
             cout << "Error: tabla no encontrada.\n";
             return;
@@ -322,6 +354,7 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
             string condicion = quitarEspacios(limpia.substr(wherePos + 7));
             string condicionMayus = aMayusculas(condicion);
             size_t igual = condicion.find('=');
+
             if (condicionMayus.find("ID") != 0 || igual == string::npos) {
                 cout << "Error: la unica condicion soportada es WHERE id = <id>.\n";
                 return;
@@ -339,7 +372,8 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
             } else {
                 cout << id << " | " << resultado << "\n";
             }
-        } else {
+        }
+        else {
             vector<Registro> registros = bd->obtenerTodos();
             if (registros.empty()) {
                 cout << "No hay registros.\n";
@@ -363,7 +397,8 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
             return;
         }
 
-        string tabla = quitarEspacios(limpia.substr(prefijo.size(), wherePos - prefijo.size()));
+        string tabla = quitarEspacios(limpia.substr(
+            prefijo.size(), wherePos - prefijo.size()));
         if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
             cout << "Error: tabla no encontrada.\n";
             return;
@@ -371,7 +406,8 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
 
         string condicion = quitarEspacios(limpia.substr(wherePos + 7));
         size_t igual = condicion.find('=');
-        if (igual == string::npos || aMayusculas(quitarEspacios(condicion.substr(0, igual))) != "ID") {
+        if (igual == string::npos ||
+            aMayusculas(quitarEspacios(condicion.substr(0, igual))) != "ID") {
             cout << "Error: la unica condicion soportada es WHERE id = <id>.\n";
             return;
         }
@@ -384,6 +420,7 @@ void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
 
         bd->eliminar(id);
         reconstruirIndices();
+        bd->guardarEnArchivo();
         cout << "DELETE ejecutado.\n";
     }
 }
