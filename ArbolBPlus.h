@@ -1,7 +1,7 @@
 /**
  * Archivo: ArbolBPlus.h
  * Propósito: Define las estructuras fundamentales de la base de datos: el Registro (fila),
- *            el Nodo (hojas e internos) y la clase que gestiona la lógica del Árbol B+.
+ *            los nodos y la clase que implementa el Árbol B+ y su persistencia.
  */
 #ifndef ARBOL_BPLUS_H
 #define ARBOL_BPLUS_H
@@ -35,23 +35,37 @@ private:
     int grado;
     string nombre_archivo;
 
-    void insertarInterno(int clave, NodoBPlus* cursor, NodoBPlus* hijo);
-    NodoBPlus* buscarPadre(NodoBPlus* cursor, NodoBPlus* hijo);
+    // Inserta una clave separadora y el nuevo hijo derecho en un nodo interno.
+    // La propagación de splits se controla desde insertar() usando el camino
+    // recorrido desde la raíz hasta la hoja, evitando buscar el padre recorriendo
+    // nuevamente todo el árbol.
+    void insertarEnPadre(NodoBPlus* padre, int clave, NodoBPlus* hijoDerecho);
+
+    // Libera todos los nodos del árbol actual.
     void liberarNodos();
 
 public:
     ArbolBPlus(int _grado, string _nombre_archivo);
     ~ArbolBPlus();
 
+    // Inserción ordenada en hojas, con split y propagación ascendente.
     void insertar(int clave, string datos);
+
+    // Búsqueda desde la raíz hasta la hoja correspondiente.
     string buscar(int clave);
+
+    // Eliminación básica. La versión de bonus con redistribución/merge
+    // puede implementarse posteriormente sin afectar las operaciones principales.
     void eliminar(int clave);
+
+    // Recorre las hojas usando siguiente_hoja.
     vector<Registro> obtenerTodos();
 
+    // Persistencia secuencial de los registros almacenados en las hojas.
     void guardarEnArchivo();
     void cargarDesdeArchivo();
 
-    // Limpia completamente el árbol que está en RAM.
+    // Limpia completamente el árbol en RAM.
     void limpiar();
 
     // Elimina el archivo físico asociado al árbol.
