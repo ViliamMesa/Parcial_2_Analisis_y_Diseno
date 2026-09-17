@@ -5,6 +5,7 @@
 #include "ArbolBPlus.h"
 #include <algorithm>
 #include <sstream>
+#include <cstdio>
 
 using namespace std;
 
@@ -19,6 +20,37 @@ NodoBPlus::NodoBPlus(bool hoja) {
 
 ArbolBPlus::ArbolBPlus(int _grado, string _nombre_archivo)
     : raiz(nullptr), grado(_grado), nombre_archivo(_nombre_archivo) {}
+
+ArbolBPlus::~ArbolBPlus() {
+    liberarNodos();
+}
+
+void ArbolBPlus::liberarNodos() {
+    if (raiz == nullptr) return;
+
+    vector<NodoBPlus*> nodos;
+    nodos.push_back(raiz);
+
+    for (size_t i = 0; i < nodos.size(); ++i) {
+        if (!nodos[i]->es_hoja) {
+            for (size_t j = 0; j < nodos[i]->hijos.size(); ++j)
+                nodos.push_back(nodos[i]->hijos[j]);
+        }
+    }
+
+    for (vector<NodoBPlus*>::reverse_iterator it = nodos.rbegin(); it != nodos.rend(); ++it)
+        delete *it;
+
+    raiz = nullptr;
+}
+
+void ArbolBPlus::limpiar() {
+    liberarNodos();
+}
+
+void ArbolBPlus::eliminarArchivo() {
+    remove(nombre_archivo.c_str());
+}
 
 NodoBPlus* ArbolBPlus::buscarPadre(NodoBPlus* cursor, NodoBPlus* hijo) {
     if (cursor == nullptr || cursor->es_hoja) return nullptr;
@@ -155,17 +187,7 @@ void ArbolBPlus::eliminar(int clave) {
     if (encontrada == registros.size()) return;
     registros.erase(registros.begin() + encontrada);
 
-    vector<NodoBPlus*> nodos;
-    nodos.push_back(raiz);
-    for (size_t i = 0; i < nodos.size(); ++i) {
-        if (!nodos[i]->es_hoja) {
-            for (size_t j = 0; j < nodos[i]->hijos.size(); ++j)
-                nodos.push_back(nodos[i]->hijos[j]);
-        }
-    }
-    for (vector<NodoBPlus*>::reverse_iterator it = nodos.rbegin(); it != nodos.rend(); ++it)
-        delete *it;
-    raiz = nullptr;
+    liberarNodos();
 
     for (size_t i = 0; i < registros.size(); ++i)
         insertar(registros[i].clave, registros[i].datos);
