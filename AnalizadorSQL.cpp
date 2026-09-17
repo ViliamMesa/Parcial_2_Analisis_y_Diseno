@@ -1,34 +1,137 @@
 /**
  * Archivo: AnalizadorSQL.cpp
- * Propósito: Implementación del Analizador Léxico y Sintáctico rudimentario. 
- *            Este archivo procesa los strings ingresados por el usuario,
- *            extrae los tokens (como el ID o los datos a guardar) y llama a 
- *            las funciones del árbol (ArbolBPlus.h).
+ * Propósito: Analiza y ejecuta el subconjunto SQL definido para el parcial.
  */
 #include "AnalizadorSQL.h"
+#include <algorithm>
+#include <cctype>
 
-// Inicializa el analizador acoplando el puntero del árbol B+ que se pasó en el main
 AnalizadorSQL::AnalizadorSQL(ArbolBPlus* base_datos) : bd(base_datos) {}
 
+AnalizadorSQL::~AnalizadorSQL() {
+    destruirIndices();
+}
+
 string AnalizadorSQL::aMayusculas(string cadena) {
-    string cadenaMayus = "";
-    // Itera letra por letra convirtiendo a su equivalente en mayúscula
-    for (char c : cadena) cadenaMayus += toupper(c);
-    return cadenaMayus;
+    for (size_t i = 0; i < cadena.size(); ++i)
+        cadena[i] = static_cast<char>(toupper(static_cast<unsigned char>(cadena[i])));
+    return cadena;
+}
+
+string AnalizadorSQL::quitarEspacios(string cadena) {
+    size_t inicio = cadena.find_first_not_of(" \t\n\r");
+    if (inicio == string::npos) return "";
+    size_t fin = cadena.find_last_not_of(" \t\n\r");
+    return cadena.substr(inicio, fin - inicio + 1);
+}
+
+string AnalizadorSQL::quitarPuntoYComa(string cadena) {
+    cadena = quitarEspacios(cadena);
+    while (!cadena.empty() && cadena[cadena.size() - 1] == ';') {
+        cadena.erase(cadena.size() - 1);
+        cadena = quitarEspacios(cadena);
+    }
+    return cadena;
+}
+
+vector<string> AnalizadorSQL::separarPorComas(string texto) {
+    vector<string> partes;
+    string actual;
+    bool dentroComillas = false;
+
+    for (size_t i = 0; i < texto.size(); ++i) {
+        char c = texto[i];
+        if (c == '\'' ) dentroComillas = !dentroComillas;
+
+        if (c == ',' && !dentroComillas) {
+            partes.push_back(quitarEspacios(actual));
+            actual.clear();
+        } else {
+            actual += c;
+        }
+    }
+
+    if (!actual.empty()) partes.push_back(quitarEspacios(actual));
+    return partes;
+}
+
+int AnalizadorSQL::posicionColumna(string columna) {
+    columna = aMayusculas(quitarEspacios(columna));
+    for (size_t i = 0; i < columnas.size(); ++i) {
+        if (aMayusculas(columnas[i]) == columna) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+string AnalizadorSQL::extraerCampo(string datos, int posicion) {
+    vector<string> campos = separarPorComas(datos);
+    if (posicion < 0 || posicion >= static_cast<int>(campos.size())) return "";
+
+    string campo = quitarEspacios(campos[posicion]);
+    if (campo.size() >= 2 && campo.front() == '\'' && campo.back() == '\'')
+        campo = campo.substr(1, campo.size() - 2);
+    return campo;
+}
+
+bool AnalizadorSQL::convertirEntero(string texto, int& valor) {
+    texto = quitarEspacios(texto);
+    if (texto.empty()) return false;
+
+    size_t inicio = (texto[0] == '-' || texto[0] == '+') ? 1 : 0;
+    if (inicio == texto.size()) return false;
+
+    for (size_t i = inicio; i < texto.size(); ++i) {
+        if (!isdigit(static_cast<unsigned char>(texto[i]))) return false;
+    }
+
+    try {
+        valor = stoi(texto);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void AnalizadorSQL::destruirIndices() {
+    for (size_t i = 0; i < indices.size(); ++i)
+        delete indices[i].arbol;
+    indices.clear();
+}
+
+void AnalizadorSQL::reconstruirIndices() {
+    for (size_t i = 0; i < indices.size(); ++i) {
+        IndiceSecundario& indice = indices[i];
+        indice.arbol->limpiar();
+
+        vector<Registro> registros = bd->obtenerTodos();
+        for (size_t j = 0; j < registros.size(); ++j) {
+            int claveIndice;
+            if (indice.posicionColumna == 0) {
+                claveIndice = registros[j].clave;
+            } else {
+                string valor = extraerCampo(registros[j].datos, indice.posicionColumna - 1);
+                if (!convertirEntero(valor, claveIndice)) continue;
+            }
+
+            // Un índice puede apuntar a más de una fila. Guardamos los IDs
+            // primarios separados por comas en el registro del árbol secundario.
+            string ids = indice.arbol->buscar(claveIndice);
+            if (!ids.empty()) ids += ",";
+            ids += to_string(registros[j].clave);
+            indice.arbol->insertar(claveIndice, ids);
+        }
+    }
 }
 
 void AnalizadorSQL::ejecutarConsulta(string consulta) {
+    consulta = quitarEspacios(consulta);
     if (consulta.empty()) return;
 
-    // Stringstream permite leer palabras de un string separadas por espacios
     stringstream ss(consulta);
     string comando;
-    
-    // Extrae la primera palabra (Ej. "INSERT", "SELECT")
     ss >> comando;
-    comando = aMayusculas(comando); // Normalizamos a mayúsculas para las comparaciones
+    comando = aMayusculas(comando);
 
-    // Derivación según familia de instrucciones SQL
     if (comando == "CREATE" || comando == "DROP") {
         analizarDDL(consulta, comando);
     } else if (comando == "SELECT" || comando == "INSERT" || comando == "DELETE") {
@@ -41,101 +144,259 @@ void AnalizadorSQL::ejecutarConsulta(string consulta) {
 }
 
 void AnalizadorSQL::analizarDDL(string consulta, string comando) {
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Ejemplo: CREATE TABLE usuarios (id INT, nombre STR);
-    
+    string limpia = quitarPuntoYComa(consulta);
+    string mayus = aMayusculas(limpia);
+
     if (comando == "CREATE") {
-        if (consulta.find("INDEX") != string::npos) {
-            // [A IMPLEMENTAR EN EL PARCIAL]: Lógica para índices secundarios
-            // Ejemplo: CREATE INDEX idx_nombre ON usuarios (nombre);
-            // Esto implicaría instanciar un SEGUNDO Árbol B+ donde la clave sea el "nombre" 
-            // y el valor sea el ID principal.
-            cout << "[Ejecutando DDL] -> Analizando creación de ÍNDICE secundario...\n";
+        if (mayus.find("CREATE TABLE") == 0) {
+            size_t inicioNombre = string("CREATE TABLE").size();
+            size_t paren = limpia.find('(', inicioNombre);
+            if (paren == string::npos) {
+                cout << "Error: CREATE TABLE requiere las columnas entre parentesis.\n";
+                return;
+            }
+
+            nombreTabla = quitarEspacios(limpia.substr(inicioNombre, paren - inicioNombre));
+            if (nombreTabla.empty()) {
+                cout << "Error: debe indicar el nombre de la tabla.\n";
+                return;
+            }
+
+            size_t cierre = limpia.rfind(')');
+            if (cierre == string::npos || cierre <= paren) {
+                cout << "Error: definicion de columnas invalida.\n";
+                return;
+            }
+
+            columnas.clear();
+            vector<string> definiciones = separarPorComas(limpia.substr(paren + 1, cierre - paren - 1));
+            for (size_t i = 0; i < definiciones.size(); ++i) {
+                stringstream col(definiciones[i]);
+                string nombreColumna;
+                col >> nombreColumna;
+                if (!nombreColumna.empty()) columnas.push_back(nombreColumna);
+            }
+
+            cout << "Tabla '" << nombreTabla << "' creada. Arbol B+ primario listo.\n";
+        } else if (mayus.find("CREATE INDEX") == 0) {
+            size_t inicio = string("CREATE INDEX").size();
+            size_t onPos = mayus.find(" ON ", inicio);
+            if (onPos == string::npos) {
+                cout << "Error: sintaxis CREATE INDEX invalida.\n";
+                return;
+            }
+
+            string nombreIndice = quitarEspacios(limpia.substr(inicio, onPos - inicio));
+            size_t inicioTabla = onPos + 4;
+            size_t parentesis = limpia.find('(', inicioTabla);
+            if (parentesis == string::npos) {
+                cout << "Error: falta la columna del indice.\n";
+                return;
+            }
+
+            string tabla = quitarEspacios(limpia.substr(inicioTabla, parentesis - inicioTabla));
+            size_t cierre = limpia.find(')', parentesis);
+            if (cierre == string::npos) {
+                cout << "Error: falta cerrar la columna del indice.\n";
+                return;
+            }
+
+            string columna = quitarEspacios(limpia.substr(parentesis + 1, cierre - parentesis - 1));
+            if (nombreTabla.empty() || aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+                cout << "Error: la tabla indicada no coincide con la tabla creada.\n";
+                return;
+            }
+
+            int posicion = posicionColumna(columna);
+            if (posicion < 0) {
+                cout << "Error: columna no encontrada: " << columna << "\n";
+                return;
+            }
+
+            for (size_t i = 0; i < indices.size(); ++i) {
+                if (aMayusculas(indices[i].nombre) == aMayusculas(nombreIndice)) {
+                    cout << "Error: el indice ya existe.\n";
+                    return;
+                }
+            }
+
+            ArbolBPlus* arbolIndice = new ArbolBPlus(3, "");
+            indices.push_back(IndiceSecundario(nombreIndice, columna, posicion, arbolIndice));
+            reconstruirIndices();
+
+            cout << "Indice '" << nombreIndice << "' creado sobre la columna '" << columna << "'.\n";
+            cout << "Nota: el Arbol B+ del esqueleto utiliza claves enteras; por eso el valor indexado debe ser numerico.\n";
         } else {
-            // En una BBDD real, aquí se crearía el esquema de la tabla o se reservaría memoria en disco
-            cout << "[Ejecutando DDL] -> Analizando creación de TABLA...\n";
+            cout << "Error: comando CREATE no reconocido. Use CREATE TABLE o CREATE INDEX.\n";
         }
     } else if (comando == "DROP") {
-        // Al eliminar una tabla, se debe limpiar el archivo en disco y limpiar los nodos RAM
-        cout << "[Ejecutando DDL] -> Analizando eliminación de tabla...\n";
+        string prefijo = "DROP TABLE";
+        if (mayus.find(prefijo) != 0) {
+            cout << "Error: solo se admite DROP TABLE.\n";
+            return;
+        }
+
+        string tabla = quitarEspacios(limpia.substr(prefijo.size()));
+        if (!nombreTabla.empty() && aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+            cout << "Error: la tabla indicada no coincide con la tabla creada.\n";
+            return;
+        }
+
+        destruirIndices();
+        bd->limpiar();
+        bd->eliminarArchivo();
+        nombreTabla.clear();
+        columnas.clear();
+        cout << "Tabla eliminada y archivo de persistencia destruido.\n";
     }
 }
 
 void AnalizadorSQL::analizarDQL_DML(string consulta, string comando) {
-    // [A IMPLEMENTAR EN EL PARCIAL]:
-    // Aquí el estudiante debe decidir cómo extraer los datos (id y contenido)
-    // del string `consulta`. Puede usar manipulacion de strings (`find`, `substr`) o Expresiones Regulares (regex).
-    
+    string limpia = quitarPuntoYComa(consulta);
+    string mayus = aMayusculas(limpia);
+
+    if (nombreTabla.empty()) {
+        cout << "Error: primero debe crear una tabla con CREATE TABLE.\n";
+        return;
+    }
+
     if (comando == "INSERT") {
-        // Ejemplo esperado del usuario: INSERT INTO tabla VALUES (10, 'Ejemplo Dato')
-        // 1. Extraer el '10' como entero.
-        // 2. Extraer el contenido entre las comillas simples "'Ejemplo Dato'" como string.
-        // 3. Ejecutar: bd->insertar(10, "'Ejemplo Dato'");
-        cout << "[Ejecutando DML] -> Analizando INSERT. (Debe llamar a ArbolBPlus::insertar)\n";
-    } 
+        string prefijo = "INSERT INTO";
+        size_t inicio = mayus.find(prefijo);
+        size_t valuesPos = mayus.find(" VALUES ", inicio + prefijo.size());
+        if (inicio != 0 || valuesPos == string::npos) {
+            cout << "Error: sintaxis INSERT invalida.\n";
+            return;
+        }
+
+        string tabla = quitarEspacios(limpia.substr(prefijo.size(), valuesPos - prefijo.size()));
+        if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+            cout << "Error: tabla no encontrada.\n";
+            return;
+        }
+
+        size_t abre = limpia.find('(', valuesPos);
+        size_t cierre = limpia.rfind(')');
+        if (abre == string::npos || cierre == string::npos || cierre <= abre) {
+            cout << "Error: faltan los valores del INSERT.\n";
+            return;
+        }
+
+        vector<string> valores = separarPorComas(limpia.substr(abre + 1, cierre - abre - 1));
+        if (valores.size() < 1) {
+            cout << "Error: INSERT sin valores.\n";
+            return;
+        }
+
+        int id;
+        if (!convertirEntero(valores[0], id)) {
+            cout << "Error: la clave primaria debe ser un entero.\n";
+            return;
+        }
+
+        string datos;
+        for (size_t i = 1; i < valores.size(); ++i) {
+            if (i > 1) datos += ",";
+            datos += quitarEspacios(valores[i]);
+        }
+
+        bd->insertar(id, datos);
+        reconstruirIndices();
+        cout << "Registro insertado correctamente.\n";
+    }
     else if (comando == "SELECT") {
-        // Ejemplo esperado: SELECT * FROM tabla; o SELECT * FROM tabla WHERE id = 10;
-        
-        if (consulta.find("WHERE") != string::npos) {
-            // Si la consulta contiene la palabra WHERE, significa que es búsqueda por ID.
-            // 1. Extraer el ID (el número que está después del "=").
-            // 2. Ejecutar: string resultado = bd->buscar(id);
-            // 3. Imprimir el resultado en pantalla para que el usuario lo vea.
-            cout << "[Ejecutando DQL] -> Analizando SELECT con condición. (Debe llamar a ArbolBPlus::buscar)\n";
+        if (mayus.find("SELECT * FROM") != 0) {
+            cout << "Error: solo se admite SELECT *.\n";
+            return;
+        }
+
+        size_t inicioTabla = string("SELECT * FROM").size();
+        size_t wherePos = mayus.find(" WHERE ", inicioTabla);
+        string tabla = quitarEspacios(limpia.substr(inicioTabla, wherePos == string::npos ? string::npos : wherePos - inicioTabla));
+        if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+            cout << "Error: tabla no encontrada.\n";
+            return;
+        }
+
+        if (wherePos != string::npos) {
+            string condicion = quitarEspacios(limpia.substr(wherePos + 7));
+            string condicionMayus = aMayusculas(condicion);
+            size_t igual = condicion.find('=');
+            if (condicionMayus.find("ID") != 0 || igual == string::npos) {
+                cout << "Error: la unica condicion soportada es WHERE id = <id>.\n";
+                return;
+            }
+
+            int id;
+            if (!convertirEntero(condicion.substr(igual + 1), id)) {
+                cout << "Error: ID invalido.\n";
+                return;
+            }
+
+            string resultado = bd->buscar(id);
+            if (resultado.empty()) {
+                cout << "Registro no encontrado.\n";
+            } else {
+                cout << id << " | " << resultado << "\n";
+            }
         } else {
-            // Si no tiene WHERE, es un barrido general de toda la base de datos (SELECT * FROM tabla).
-            // 1. Ejecutar: vector<Registro> resultados = bd->obtenerTodos();
-            // 2. Iterar y pintar todos los registros recuperados de las hojas del árbol.
-            cout << "[Ejecutando DQL] -> Analizando SELECT general. (Debe llamar a ArbolBPlus::obtenerTodos)\n";
+            vector<Registro> registros = bd->obtenerTodos();
+            if (registros.empty()) {
+                cout << "No hay registros.\n";
+                return;
+            }
+
+            for (size_t i = 0; i < registros.size(); ++i)
+                cout << registros[i].clave << " | " << registros[i].datos << "\n";
         }
     }
     else if (comando == "DELETE") {
-        // Ejemplo esperado: DELETE FROM tabla WHERE id = 10;
-        // 1. Extraer el ID después del "WHERE id = "
-        // 2. Ejecutar: bd->eliminar(id);
-        cout << "[Ejecutando DML] -> Analizando DELETE. (Debe llamar a ArbolBPlus::eliminar)\n";
+        string prefijo = "DELETE FROM";
+        if (mayus.find(prefijo) != 0) {
+            cout << "Error: sintaxis DELETE invalida.\n";
+            return;
+        }
+
+        size_t wherePos = mayus.find(" WHERE ", prefijo.size());
+        if (wherePos == string::npos) {
+            cout << "Error: DELETE requiere WHERE id = <id>.\n";
+            return;
+        }
+
+        string tabla = quitarEspacios(limpia.substr(prefijo.size(), wherePos - prefijo.size()));
+        if (aMayusculas(tabla) != aMayusculas(nombreTabla)) {
+            cout << "Error: tabla no encontrada.\n";
+            return;
+        }
+
+        string condicion = quitarEspacios(limpia.substr(wherePos + 7));
+        size_t igual = condicion.find('=');
+        if (igual == string::npos || aMayusculas(quitarEspacios(condicion.substr(0, igual))) != "ID") {
+            cout << "Error: la unica condicion soportada es WHERE id = <id>.\n";
+            return;
+        }
+
+        int id;
+        if (!convertirEntero(condicion.substr(igual + 1), id)) {
+            cout << "Error: ID invalido.\n";
+            return;
+        }
+
+        bd->eliminar(id);
+        reconstruirIndices();
+        cout << "DELETE ejecutado.\n";
     }
 }
 
 void AnalizadorSQL::mostrarAyuda() {
-    // Configuración de colores estándar ANSI para terminales modernas
-    const string RESET = "\033[0m";
-    const string BOLD_YELLOW = "\033[1;33m";
-    const string BOLD_CYAN = "\033[1;36m";
-    const string BOLD_GREEN = "\033[1;32m";
-    const string BOLD_WHITE = "\033[1;37m";
-
-    cout << BOLD_YELLOW << "\n=== Sistema Gestor SQL basado en Árboles B+ ===" << RESET << "\n";
-    cout << BOLD_WHITE << "Comandos Soportados (Esqueleto):" << RESET << "\n";
-    
-    // Categoría DDL
-    cout << BOLD_YELLOW << "  [DDL - Lenguaje de Definición de Datos]" << RESET << "\n";
-    cout << BOLD_CYAN << "    Sintaxis: CREATE TABLE <nombre> (columnas...)" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : CREATE TABLE usuarios (id INT, nombre STR)" << RESET << "\n\n";
-    
-    cout << BOLD_CYAN << "    Sintaxis: CREATE INDEX <nombre> ON <tabla> (columna)" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : CREATE INDEX idx_nombre ON usuarios (nombre)" << RESET << "\n\n";
-    
-    cout << BOLD_CYAN << "    Sintaxis: DROP TABLE <nombre>" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : DROP TABLE usuarios" << RESET << "\n\n";
-
-    // Categoría DML/DQL
-    cout << BOLD_YELLOW << "  [DQL / DML - Manipulación y Consulta]" << RESET << "\n";
-    cout << BOLD_CYAN << "    Sintaxis: INSERT INTO <nombre> VALUES (<id>, <datos>)" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : INSERT INTO usuarios VALUES (10, 'Juan Perez, 25')" << RESET << "\n\n";
-    
-    cout << BOLD_CYAN << "    Sintaxis: SELECT * FROM <nombre>" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : SELECT * FROM usuarios" << RESET << "\n\n";
-    
-    cout << BOLD_CYAN << "    Sintaxis: SELECT * FROM <nombre> WHERE id = <id>" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : SELECT * FROM usuarios WHERE id = 10" << RESET << "\n\n";
-    
-    cout << BOLD_CYAN << "    Sintaxis: DELETE FROM <nombre> WHERE id = <id>" << RESET << "\n";
-    cout << BOLD_GREEN << "    Ejemplo : DELETE FROM usuarios WHERE id = 10" << RESET << "\n\n";
-    
-    // Controles Base
-    cout << BOLD_YELLOW << "  [Otros Comandos]" << RESET << "\n";
-    cout << BOLD_CYAN << "    HELP  - Muestra este menu" << RESET << "\n";
-    cout << BOLD_CYAN << "    EXIT  - Guarda los datos y sale del programa" << RESET << "\n";
-    cout << BOLD_YELLOW << "================================================" << RESET << "\n\n";
+    cout << "\n=== Motor SQL con Arboles B+ ===\n";
+    cout << "CREATE TABLE usuarios (id INT, edad INT, nombre STR)\n";
+    cout << "CREATE INDEX idx_edad ON usuarios (edad)\n";
+    cout << "DROP TABLE usuarios\n";
+    cout << "INSERT INTO usuarios VALUES (10, 20, 'Juan')\n";
+    cout << "SELECT * FROM usuarios\n";
+    cout << "SELECT * FROM usuarios WHERE id = 10\n";
+    cout << "DELETE FROM usuarios WHERE id = 10\n";
+    cout << "HELP\n";
+    cout << "EXIT\n\n";
 }
